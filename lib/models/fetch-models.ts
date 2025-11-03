@@ -5,14 +5,13 @@ import { LLM_LIST_MAP } from "./llm/llm-list"
 
 export const fetchHostedModels = async (profile: Tables<"profiles">) => {
   try {
-    const providers = [
-      "openai",
-      "google",
-      "azure",
-      "anthropic",
-      "mistral",
-      "perplexity"
-    ]
+    const providers = ["google", "anthropic", "mistral", "groq", "perplexity"]
+
+    if (profile.use_azure_openai) {
+      providers.push("azure")
+    } else {
+      providers.push("openai")
+    }
 
     const response = await fetch("/api/keys")
 
@@ -40,8 +39,6 @@ export const fetchHostedModels = async (profile: Tables<"profiles">) => {
 
         if (Array.isArray(models)) {
           modelsToAdd.push(...models)
-        } else {
-          console.warn(`LLM_LIST_MAP entry for '${provider}' is not an array.`)
         }
       }
     }

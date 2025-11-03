@@ -1,11 +1,15 @@
 import { ChatbotUIContext } from "@/context/context"
+import { getAssistantCollectionsByAssistantId } from "@/db/assistant-collections"
+import { getAssistantFilesByAssistantId } from "@/db/assistant-files"
+import { getAssistantToolsByAssistantId } from "@/db/assistant-tools"
 import { updateChat } from "@/db/chats"
+import { getCollectionFilesByCollectionId } from "@/db/collection-files"
 import { deleteMessagesIncludingAndAfter } from "@/db/messages"
 import { buildFinalMessages } from "@/lib/build-prompt"
 import { Tables } from "@/supabase/types"
-import { ChatMessage, ChatPayload, LLMID } from "@/types"
+import { ChatMessage, ChatPayload, LLMID, ModelProvider } from "@/types"
 import { useRouter } from "next/navigation"
-import { useContext, useRef } from "react"
+import { useContext, useEffect, useRef } from "react"
 import { LLM_LIST } from "../../../lib/models/llm/llm-list"
 import {
   createTempMessages,
@@ -55,15 +59,27 @@ export const useChatHandler = () => {
     useRetrieval,
     sourceCount,
     setIsPromptPickerOpen,
-    setIsAtPickerOpen,
+    setIsFilePickerOpen,
     selectedTools,
     selectedPreset,
-    setChatSettings
+    setChatSettings,
+    models,
+    isPromptPickerOpen,
+    isFilePickerOpen,
+    isToolPickerOpen
   } = useContext(ChatbotUIContext)
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
 
-  const handleNewChat = () => {
+  useEffect(() => {
+    if (!isPromptPickerOpen || !isFilePickerOpen || !isToolPickerOpen) {
+      chatInputRef.current?.focus()
+    }
+  }, [isPromptPickerOpen, isFilePickerOpen, isToolPickerOpen])
+
+  const handleNewChat = async () => {
+    if (!selectedWorkspace) return
+
     setUserInput("")
     setChatMessages([])
     setSelectedChat(null)
@@ -78,7 +94,7 @@ export const useChatHandler = () => {
     setNewMessageImages([])
     setShowFilesDisplay(false)
     setIsPromptPickerOpen(false)
-    setIsAtPickerOpen(false)
+    setIsFilePickerOpen(false)
 
     setSelectedTools([])
     setToolInUse("none")
@@ -96,6 +112,37 @@ export const useChatHandler = () => {
           | "openai"
           | "local"
       })
+
+      let allFiles = []
+
+      const assistantFiles = (
+        await getAssistantFilesByAssistantId(selectedAssistant.id)
+      ).files
+      allFiles = [...assistantFiles]
+      const assistantCollections = (
+        await getAssistantCollectionsByAssistantId(selectedAssistant.id)
+      ).collections
+      for (const collection of assistantCollections) {
+        const collectionFiles = (
+          await getCollectionFilesByCollectionId(collection.id)
+        ).files
+        allFiles = [...allFiles, ...collectionFiles]
+      }
+      const assistantTools = (
+        await getAssistantToolsByAssistantId(selectedAssistant.id)
+      ).tools
+
+      setSelectedTools(assistantTools)
+      setChatFiles(
+        allFiles.map(file => ({
+          id: file.id,
+          name: file.name,
+          type: file.type,
+          file: null
+        }))
+      )
+
+      if (allFiles.length > 0) setShowFilesDisplay(true)
     } else if (selectedPreset) {
       setChatSettings({
         model: selectedPreset.model as LLMID,
@@ -110,25 +157,25 @@ export const useChatHandler = () => {
           | "local"
       })
     } else if (selectedWorkspace) {
-      setChatSettings({
-        model: (selectedWorkspace.default_model ||
-          "gpt-4-1106-preview") as LLMID,
-        prompt:
-          selectedWorkspace.default_prompt ||
-          "You are a friendly, helpful AI assistant.",
-        temperature: selectedWorkspace.default_temperature || 0.5,
-        contextLength: selectedWorkspace.default_context_length || 4096,
-        includeProfileContext:
-          selectedWorkspace.include_profile_context || true,
-        includeWorkspaceInstructions:
-          selectedWorkspace.include_workspace_instructions || true,
-        embeddingsProvider:
-          (selectedWorkspace.embeddings_provider as "openai" | "local") ||
-          "openai"
-      })
+      // setChatSettings({
+      //   model: (selectedWorkspace.default_model ||
+      //     "gpt-4-1106-preview") as LLMID,
+      //   prompt:
+      //     selectedWorkspace.default_prompt ||
+      //     "You are a friendly, helpful AI assistant.",
+      //   temperature: selectedWorkspace.default_temperature || 0.5,
+      //   contextLength: selectedWorkspace.default_context_length || 4096,
+      //   includeProfileContext:
+      //     selectedWorkspace.include_profile_context || true,
+      //   includeWorkspaceInstructions:
+      //     selectedWorkspace.include_workspace_instructions || true,
+      //   embeddingsProvider:
+      //     (selectedWorkspace.embeddings_provider as "openai" | "local") ||
+      //     "openai"
+      // })
     }
 
-    router.push("/chat")
+    return router.push(`/${selectedWorkspace.id}/chat`)
   }
 
   const handleFocusChatInput = () => {
@@ -152,13 +199,21 @@ export const useChatHandler = () => {
       setUserInput("")
       setIsGenerating(true)
       setIsPromptPickerOpen(false)
-      setIsAtPickerOpen(false)
+      setIsFilePickerOpen(false)
       setNewMessageImages([])
 
       const newAbortController = new AbortController()
       setAbortController(newAbortController)
 
       const modelData = [
+        ...models.map(model => ({
+          modelId: model.model_id as LLMID,
+          modelName: model.name,
+          provider: "custom" as ModelProvider,
+          hostedId: model.id,
+          platformLink: "",
+          imageInput: false
+        })),
         ...LLM_LIST,
         ...availableLocalModels,
         ...availableOpenRouterModels
@@ -200,7 +255,8 @@ export const useChatHandler = () => {
           chatSettings!,
           b64Images,
           isRegeneration,
-          setChatMessages
+          setChatMessages,
+          selectedAssistant
         )
 
       let payload: ChatPayload = {
@@ -217,7 +273,7 @@ export const useChatHandler = () => {
       let generatedText = ""
 
       if (selectedTools.length > 0) {
-        setToolInUse(selectedTools.length > 1 ? "Tools" : selectedTools[0].name)
+        setToolInUse("Tools")
 
         const formattedMessages = await buildFinalMessages(
           payload,
@@ -320,12 +376,12 @@ export const useChatHandler = () => {
         retrievedFileItems,
         setChatMessages,
         setChatFileItems,
-        setChatImages
+        setChatImages,
+        selectedAssistant
       )
 
       setIsGenerating(false)
       setFirstTokenReceived(false)
-      setUserInput("")
     } catch (error) {
       setIsGenerating(false)
       setFirstTokenReceived(false)

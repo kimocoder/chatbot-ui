@@ -2,7 +2,14 @@
 
 import { ChatbotUIContext } from "@/context/context"
 import { getProfileByUserId, updateProfile } from "@/db/profile"
-import { getWorkspacesByUserId } from "@/db/workspaces"
+import {
+  getHomeWorkspaceByUserId,
+  getWorkspacesByUserId
+} from "@/db/workspaces"
+import {
+  fetchHostedModels,
+  fetchOpenRouterModels
+} from "@/lib/models/fetch-models"
 import { supabase } from "@/lib/supabase/browser-client"
 import { TablesUpdate } from "@/supabase/types"
 import { useRouter } from "next/navigation"
@@ -16,8 +23,15 @@ import {
 } from "../../../components/setup/step-container"
 
 export default function SetupPage() {
-  const { profile, setProfile, setWorkspaces, setSelectedWorkspace } =
-    useContext(ChatbotUIContext)
+  const {
+    profile,
+    setProfile,
+    setWorkspaces,
+    setSelectedWorkspace,
+    setEnvKeyMap,
+    setAvailableHostedModels,
+    setAvailableOpenRouterModels
+  } = useContext(ChatbotUIContext)
 
   const router = useRouter()
 
@@ -43,6 +57,7 @@ export default function SetupPage() {
   const [anthropicAPIKey, setAnthropicAPIKey] = useState("")
   const [googleGeminiAPIKey, setGoogleGeminiAPIKey] = useState("")
   const [mistralAPIKey, setMistralAPIKey] = useState("")
+  const [groqAPIKey, setGroqAPIKey] = useState("")
   const [perplexityAPIKey, setPerplexityAPIKey] = useState("")
   const [openrouterAPIKey, setOpenrouterAPIKey] = useState("")
 
@@ -51,7 +66,7 @@ export default function SetupPage() {
       const session = (await supabase.auth.getSession()).data.session
 
       if (!session) {
-        router.push("/login")
+        return router.push("/login")
       } else {
         const user = session.user
 
@@ -62,7 +77,23 @@ export default function SetupPage() {
         if (!profile.has_onboarded) {
           setLoading(false)
         } else {
-          router.push("/chat")
+          const data = await fetchHostedModels(profile)
+
+          if (!data) return
+
+          setEnvKeyMap(data.envKeyMap)
+          setAvailableHostedModels(data.hostedModels)
+
+          if (profile["openrouter_api_key"] || data.envKeyMap["openrouter"]) {
+            const openRouterModels = await fetchOpenRouterModels()
+            if (!openRouterModels) return
+            setAvailableOpenRouterModels(openRouterModels)
+          }
+
+          const homeWorkspaceId = await getHomeWorkspaceByUserId(
+            session.user.id
+          )
+          return router.push(`/${homeWorkspaceId}/chat`)
         }
       }
     })()
@@ -83,8 +114,7 @@ export default function SetupPage() {
   const handleSaveSetupSetting = async () => {
     const session = (await supabase.auth.getSession()).data.session
     if (!session) {
-      router.push("/login")
-      return
+      return router.push("/login")
     }
 
     const user = session.user
@@ -100,6 +130,7 @@ export default function SetupPage() {
       anthropic_api_key: anthropicAPIKey,
       google_gemini_api_key: googleGeminiAPIKey,
       mistral_api_key: mistralAPIKey,
+      groq_api_key: groqAPIKey,
       perplexity_api_key: perplexityAPIKey,
       openrouter_api_key: openrouterAPIKey,
       use_azure_openai: useAzureOpenai,
@@ -121,7 +152,7 @@ export default function SetupPage() {
     setSelectedWorkspace(homeWorkspace!)
     setWorkspaces(workspaces)
 
-    router.refresh()
+    return router.push(`/${homeWorkspace?.id}/chat`)
   }
 
   const renderStep = (stepNum: number) => {
@@ -171,6 +202,7 @@ export default function SetupPage() {
               anthropicAPIKey={anthropicAPIKey}
               googleGeminiAPIKey={googleGeminiAPIKey}
               mistralAPIKey={mistralAPIKey}
+              groqAPIKey={groqAPIKey}
               perplexityAPIKey={perplexityAPIKey}
               useAzureOpenai={useAzureOpenai}
               onOpenaiAPIKeyChange={setOpenaiAPIKey}
@@ -184,6 +216,7 @@ export default function SetupPage() {
               onAnthropicAPIKeyChange={setAnthropicAPIKey}
               onGoogleGeminiAPIKeyChange={setGoogleGeminiAPIKey}
               onMistralAPIKeyChange={setMistralAPIKey}
+              onGroqAPIKeyChange={setGroqAPIKey}
               onPerplexityAPIKeyChange={setPerplexityAPIKey}
               onUseAzureOpenaiChange={setUseAzureOpenai}
               openrouterAPIKey={openrouterAPIKey}

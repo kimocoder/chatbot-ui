@@ -3,23 +3,21 @@ import { ChatbotUIContext } from "@/context/context"
 import { LLM_LIST } from "@/lib/models/llm/llm-list"
 import { cn } from "@/lib/utils"
 import { Tables } from "@/supabase/types"
-import { LLM, LLMID, MessageImage } from "@/types"
+import { LLM, LLMID, MessageImage, ModelProvider } from "@/types"
 import {
   IconBolt,
   IconCaretDownFilled,
   IconCaretRightFilled,
   IconCircleFilled,
-  IconFileFilled,
   IconFileText,
-  IconFileTypePdf,
   IconMoodSmile,
-  IconRobotFace
+  IconPencil
 } from "@tabler/icons-react"
 import Image from "next/image"
 import { FC, useContext, useEffect, useRef, useState } from "react"
 import { ModelIcon } from "../models/model-icon"
-import { Avatar, AvatarImage } from "../ui/avatar"
 import { Button } from "../ui/button"
+import { FileIcon } from "../ui/file-icon"
 import { FilePreview } from "../ui/file-preview"
 import { TextareaAutosize } from "../ui/textarea-autosize"
 import { WithTooltip } from "../ui/with-tooltip"
@@ -27,7 +25,7 @@ import { MessageActions } from "./message-actions"
 import { MessageMarkdown } from "./message-markdown"
 import { MessageReply } from "./message-reply"
 
-const ICON_SIZE = 28
+const ICON_SIZE = 32
 
 interface MessageProps {
   message: Tables<"messages">
@@ -49,6 +47,7 @@ export const Message: FC<MessageProps> = ({
   onSubmitEdit
 }) => {
   const {
+    assistants,
     profile,
     isGenerating,
     setIsGenerating,
@@ -60,7 +59,8 @@ export const Message: FC<MessageProps> = ({
     chatImages,
     assistantImages,
     toolInUse,
-    files
+    files,
+    models
   } = useContext(ChatbotUIContext)
 
   const { handleSendMessage } = useChatHandler()
@@ -182,14 +182,57 @@ export const Message: FC<MessageProps> = ({
   }
 
   const MODEL_DATA = [
+    ...models.map(model => ({
+      modelId: model.model_id as LLMID,
+      modelName: model.name,
+      provider: "custom" as ModelProvider,
+      hostedId: model.id,
+      platformLink: "",
+      imageInput: false
+    })),
     ...LLM_LIST,
     ...availableLocalModels,
     ...availableOpenRouterModels
   ].find(llm => llm.modelId === message.model) as LLM
 
+  const messageAssistantImage = assistantImages.find(
+    image => image.assistantId === message.assistant_id
+  )?.base64
+
   const selectedAssistantImage = assistantImages.find(
     image => image.path === selectedAssistant?.image_path
   )?.base64
+
+  const modelDetails = LLM_LIST.find(model => model.modelId === message.model)
+
+  const fileAccumulator: Record<
+    string,
+    {
+      id: string
+      name: string
+      count: number
+      type: string
+      description: string
+    }
+  > = {}
+
+  const fileSummary = fileItems.reduce((acc, fileItem) => {
+    const parentFile = files.find(file => file.id === fileItem.file_id)
+    if (parentFile) {
+      if (!acc[parentFile.id]) {
+        acc[parentFile.id] = {
+          id: parentFile.id,
+          name: parentFile.name,
+          count: 1,
+          type: parentFile.type,
+          description: parentFile.description
+        }
+      } else {
+        acc[parentFile.id].count += 1
+      }
+    }
+    return acc
+  }, fileAccumulator)
 
   return (
     <div
@@ -201,8 +244,8 @@ export const Message: FC<MessageProps> = ({
       onMouseLeave={() => setIsHovering(false)}
       onKeyDown={handleKeyDown}
     >
-      <div className="relative flex w-[300px] flex-col py-6 sm:w-[400px] md:w-[500px] lg:w-[600px] xl:w-[700px]">
-        <div className="absolute right-0 top-7">
+      <div className="relative flex w-full flex-col p-6 sm:w-[550px] sm:px-0 md:w-[650px] lg:w-[650px] xl:w-[700px]">
+        <div className="absolute right-5 top-7 sm:right-0">
           <MessageActions
             onCopy={handleCopy}
             onEdit={handleStartEdit}
@@ -213,54 +256,69 @@ export const Message: FC<MessageProps> = ({
             onRegenerate={handleRegenerate}
           />
         </div>
-
         <div className="space-y-3">
-          <div className="flex items-center space-x-3">
-            {message.role === "assistant" ? (
-              selectedAssistant ? (
-                selectedAssistantImage ? (
+          {message.role === "system" ? (
+            <div className="flex items-center space-x-4">
+              <IconPencil
+                className="border-primary bg-primary text-secondary rounded border-DEFAULT p-1"
+                size={ICON_SIZE}
+              />
+
+              <div className="text-lg font-semibold">Prompt</div>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-3">
+              {message.role === "assistant" ? (
+                messageAssistantImage ? (
                   <Image
+                    style={{
+                      width: `${ICON_SIZE}px`,
+                      height: `${ICON_SIZE}px`
+                    }}
                     className="rounded"
-                    src={selectedAssistantImage || ""}
+                    src={messageAssistantImage}
                     alt="assistant image"
                     height={ICON_SIZE}
                     width={ICON_SIZE}
                   />
                 ) : (
-                  <IconRobotFace
-                    className="bg-primary text-secondary border-primary rounded border-[1px] p-1"
-                    size={ICON_SIZE}
+                  <WithTooltip
+                    display={<div>{MODEL_DATA?.modelName}</div>}
+                    trigger={
+                      <ModelIcon
+                        provider={modelDetails?.provider || "custom"}
+                        height={ICON_SIZE}
+                        width={ICON_SIZE}
+                      />
+                    }
                   />
                 )
-              ) : (
-                <WithTooltip
-                  display={<div>{MODEL_DATA.modelName}</div>}
-                  trigger={
-                    <ModelIcon
-                      modelId={message.model as LLMID}
-                      height={ICON_SIZE}
-                      width={ICON_SIZE}
-                    />
-                  }
+              ) : profile?.image_url ? (
+                <Image
+                  className={`size-[32px] rounded`}
+                  src={profile?.image_url}
+                  height={32}
+                  width={32}
+                  alt="user image"
                 />
-              )
-            ) : profile?.image_url ? (
-              <Avatar className={`size-[28px] rounded`}>
-                <AvatarImage src={profile?.image_url} />
-              </Avatar>
-            ) : (
-              <IconMoodSmile
-                className="bg-primary text-secondary border-primary rounded border-[1px] p-1"
-                size={ICON_SIZE}
-              />
-            )}
+              ) : (
+                <IconMoodSmile
+                  className="bg-primary text-secondary border-primary rounded border-DEFAULT p-1"
+                  size={ICON_SIZE}
+                />
+              )}
 
-            <div className="font-semibold">
-              {message.role === "assistant"
-                ? selectedAssistant
-                  ? selectedAssistant?.name
-                  : MODEL_DATA?.modelName
-                : profile?.display_name ?? profile?.username}
+              <div className="font-semibold">
+                {message.role === "assistant"
+                  ? message.assistant_id
+                    ? assistants.find(
+                        assistant => assistant.id === message.assistant_id
+                      )?.name
+                    : selectedAssistant
+                      ? selectedAssistant?.name
+                      : MODEL_DATA?.modelName
+                  : profile?.display_name ?? profile?.username}
+              </div>
             </div>
           </div>
 
@@ -310,64 +368,66 @@ export const Message: FC<MessageProps> = ({
         </div>
 
         {fileItems.length > 0 && (
-          <div className="mt-6 text-lg font-bold">
+          <div className="border-primary mt-6 border-t pt-4 font-bold">
             {!viewSources ? (
               <div
-                className="flex cursor-pointer items-center hover:opacity-50"
+                className="flex cursor-pointer items-center text-lg hover:opacity-50"
                 onClick={() => setViewSources(true)}
               >
-                View {fileItems.length} Sources{" "}
+                {fileItems.length}
+                {fileItems.length > 1 ? " Sources " : " Source "}
+                from {Object.keys(fileSummary).length}{" "}
+                {Object.keys(fileSummary).length > 1 ? "Files" : "File"}{" "}
                 <IconCaretRightFilled className="ml-1" />
               </div>
             ) : (
               <>
                 <div
-                  className="flex cursor-pointer items-center hover:opacity-50"
+                  className="flex cursor-pointer items-center text-lg hover:opacity-50"
                   onClick={() => setViewSources(false)}
                 >
-                  Sources <IconCaretDownFilled className="ml-1" />
+                  {fileItems.length}
+                  {fileItems.length > 1 ? " Sources " : " Source "}
+                  from {Object.keys(fileSummary).length}{" "}
+                  {Object.keys(fileSummary).length > 1 ? "Files" : "File"}{" "}
+                  <IconCaretDownFilled className="ml-1" />
                 </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  {fileItems.map((fileItem, index) => {
-                    const parentFile = files.find(
-                      file => file.id === fileItem.file_id
-                    )
-
-                    return (
-                      <div
-                        key={index}
-                        className="border-primary flex cursor-pointer items-center space-x-4 rounded-xl border px-4 py-3 hover:opacity-50"
-                        onClick={() => {
-                          setSelectedFileItem(fileItem)
-                          setShowFileItemPreview(true)
-                        }}
-                      >
-                        <div className="rounded bg-blue-500 p-2">
-                          {(() => {
-                            let fileExtension = parentFile?.type.includes("/")
-                              ? parentFile.type.split("/")[1]
-                              : parentFile?.type
-
-                            switch (fileExtension) {
-                              case "pdf":
-                                return <IconFileTypePdf />
-                              default:
-                                return <IconFileFilled />
-                            }
-                          })()}
+                <div className="mt-3 space-y-4">
+                  {Object.values(fileSummary).map((file, index) => (
+                    <div key={index}>
+                      <div className="flex items-center space-x-2">
+                        <div>
+                          <FileIcon type={file.type} />
                         </div>
 
-                        <div className="w-fit space-y-1 truncate text-wrap text-xs">
-                          <div className="truncate">{parentFile?.name}</div>
-
-                          <div className="truncate text-xs opacity-50">
-                            {fileItem.content.substring(0, 60)}...
-                          </div>
-                        </div>
+                        <div className="truncate">{file.name}</div>
                       </div>
-                    )
-                  })}
+
+                      {fileItems
+                        .filter(fileItem => {
+                          const parentFile = files.find(
+                            parentFile => parentFile.id === fileItem.file_id
+                          )
+                          return parentFile?.id === file.id
+                        })
+                        .map((fileItem, index) => (
+                          <div
+                            key={index}
+                            className="ml-8 mt-1.5 flex cursor-pointer items-center space-x-2 hover:opacity-50"
+                            onClick={() => {
+                              setSelectedFileItem(fileItem)
+                              setShowFileItemPreview(true)
+                            }}
+                          >
+                            <div className="text-sm font-normal">
+                              <span className="mr-1 text-lg font-bold">-</span>{" "}
+                              {fileItem.content.substring(0, 200)}...
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ))}
                 </div>
               </>
             )}

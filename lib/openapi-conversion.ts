@@ -1,178 +1,170 @@
-import OpenAI from "openai"
-
-interface Parameter {
-  name: string
-  in: string
-  description: string
-  required: boolean
-  schema: { type: string }
-}
-
-interface SchemaDetail {
-  description?: string
-  type: string
-}
+import $RefParser from "@apidevtools/json-schema-ref-parser"
 
 interface OpenAPIData {
-  title: string
-  description: string
-  url: string
+  info: {
+    title: string
+    description: string
+    server: string
+  }
   routes: {
     path: string
-    methods: {
-      method: string
-      description: string
-      operationId: string
-      params: {
-        name: string
-        location: string
-        description: string
-        required: boolean
-        schema: { type: string }
-      }[]
-    }[]
+    method: string
+    operationId: string
+    requestInBody?: boolean
   }[]
+  functions: any
 }
 
-export const extractOpenapiDataUrl = (schema: string): OpenAPIData => {
-  const schemaObject = JSON.parse(schema)
-
-  if (!schemaObject.openapi || schemaObject.openapi !== "3.1.0") {
-    throw new Error("Invalid OpenAPI schema. Only version 3.1.0 is supported.")
+export const validateOpenAPI = async (openapiSpec: any) => {
+  if (!openapiSpec.info) {
+    throw new Error("('info'): field required")
   }
 
-  const title = schemaObject.info.title
-  const description = schemaObject.info.description
-  const url = schemaObject.servers[0].url
+  if (!openapiSpec.info.title) {
+    throw new Error("('info', 'title'): field required")
+  }
 
-  const paths = schemaObject.paths
-  const routes = Object.keys(paths).map(path => {
-    const methods = Object.keys(paths[path]).map(method => {
-      const { description, operationId, parameters } = paths[path][method]
+  if (!openapiSpec.info.version) {
+    throw new Error("('info', 'version'): field required")
+  }
 
-      const params = parameters.map((param: Parameter) => {
-        const { name, in: location, description, required, schema } = param
+  if (
+    !openapiSpec.servers ||
+    !openapiSpec.servers.length ||
+    !openapiSpec.servers[0].url
+  ) {
+    throw new Error("Could not find a valid URL in `servers`")
+  }
 
-        return {
-          name,
-          location,
-          description,
-          required,
-          schema
-        }
-      })
+  if (!openapiSpec.paths || Object.keys(openapiSpec.paths).length === 0) {
+    throw new Error("No paths found in the OpenAPI spec")
+  }
 
-      return {
-        method,
-        description,
-        operationId,
-        params
-      }
-    })
-
-    return {
-      path,
-      methods
+  Object.keys(openapiSpec.paths).forEach(path => {
+    if (!path.startsWith("/")) {
+      throw new Error(`Path ${path} does not start with a slash; skipping`)
     }
   })
 
-  return {
-    title,
-    description,
-    url,
-    routes
-  }
-}
-
-export const extractOpenapiDataBody = (schemaString: string): OpenAPIData => {
-  const schema = JSON.parse(schemaString)
-
-  if (schema.openapi !== "3.1.0") {
-    throw new Error("Invalid OpenAPI schema. Only version 3.1.0 is supported.")
-  }
-
-  const title = schema.info.title
-  const description = schema.info.description
-  const url = schema.servers[0].url
-
-  const routes = Object.entries(schema.paths).map(([path, pathItem]) => {
-    const methods = Object.entries(pathItem as Record<string, any>).map(
-      ([method, methodData]) => {
-        const params = methodData.requestBody?.content["application/json"]
-          ?.schema?.properties
-          ? Object.entries(
-              methodData.requestBody.content["application/json"].schema
-                .properties
-            ).map(([name, schemaDetail]) => {
-              const detail = schemaDetail as SchemaDetail
-              const required = methodData.requestBody.required || false
-
-              return {
-                name,
-                location: "body",
-                schema: { type: detail.type },
-                required,
-                description: detail.description || ""
-              }
-            })
-          : []
-
-        return {
-          method,
-          operationId: methodData.operationId || "",
-          description: methodData.description || "",
-          params
-        }
-      }
+  if (
+    Object.values(openapiSpec.paths).some((methods: any) =>
+      Object.values(methods).some((spec: any) => !spec.operationId)
     )
+  ) {
+    throw new Error("Some methods are missing operationId")
+  }
 
-    return {
-      path,
-      methods
-    }
-  })
+  if (
+    Object.values(openapiSpec.paths).some((methods: any) =>
+      Object.values(methods).some(
+        (spec: any) => spec.requestBody && !spec.requestBody.content
+      )
+    )
+  ) {
+    throw new Error(
+      "Some methods with a requestBody are missing requestBody.content"
+    )
+  }
 
-  return {
-    title,
-    description,
-    url,
-    routes
+  if (
+    Object.values(openapiSpec.paths).some((methods: any) =>
+      Object.values(methods).some((spec: any) => {
+        if (spec.requestBody?.content?.["application/json"]?.schema) {
+          if (
+            !spec.requestBody.content["application/json"].schema.properties ||
+            Object.keys(spec.requestBody.content["application/json"].schema)
+              .length === 0
+          ) {
+            throw new Error(
+              `In context=('paths', '${Object.keys(methods)[0]}', '${
+                Object.keys(spec)[0]
+              }', 'requestBody', 'content', 'application/json', 'schema'), object schema missing properties`
+            )
+          }
+        }
+      })
+    )
+  ) {
+    throw new Error("Some object schemas are missing properties")
   }
 }
 
-export const openapiDataToFunctions = (data: OpenAPIData) => {
-  let functions: OpenAI.Chat.Completions.ChatCompletionTool[] = []
+export const openapiToFunctions = async (
+  openapiSpec: any
+): Promise<OpenAPIData> => {
+  const functions: any[] = [] // Define a proper type for function objects
+  const routes: {
+    path: string
+    method: string
+    operationId: string
+    requestInBody?: boolean // Add a flag to indicate if the request should be in the body
+  }[] = []
 
-  data.routes.map(route => {
-    route.methods.map(method => {
-      let properties: any = {}
-      let required: string[] = []
+  for (const [path, methods] of Object.entries(openapiSpec.paths)) {
+    if (typeof methods !== "object" || methods === null) {
+      continue
+    }
 
-      method.params.map(param => {
-        properties[param.name] = {
-          type: param.schema.type,
-          description: param.description
+    for (const [method, specWithRef] of Object.entries(
+      methods as Record<string, any>
+    )) {
+      const spec: any = await $RefParser.dereference(specWithRef)
+      const functionName = spec.operationId
+      const desc = spec.description || spec.summary || ""
+
+      const schema: { type: string; properties: any; required?: string[] } = {
+        type: "object",
+        properties: {}
+      }
+
+      const reqBody = spec.requestBody?.content?.["application/json"]?.schema
+      if (reqBody) {
+        schema.properties.requestBody = reqBody
+      }
+
+      const params = spec.parameters || []
+      if (params.length > 0) {
+        const paramProperties = params.reduce((acc: any, param: any) => {
+          if (param.schema) {
+            acc[param.name] = param.schema
+          }
+          return acc
+        }, {})
+
+        schema.properties.parameters = {
+          type: "object",
+          properties: paramProperties
         }
-
-        if (param.required) {
-          required.push(param.name)
-        }
-      })
+      }
 
       functions.push({
         type: "function",
         function: {
-          name: method.operationId,
-          description: method.description,
-          parameters: {
-            type: "object",
-            properties: properties,
-            required: required
-          }
+          name: functionName,
+          description: desc,
+          parameters: schema
         }
       })
-    })
-  })
 
-  return functions
+      // Determine if the request should be in the body based on the presence of requestBody
+      const requestInBody = !!spec.requestBody
+
+      routes.push({
+        path,
+        method,
+        operationId: functionName,
+        requestInBody // Include this flag in the route information
+      })
+    }
+  }
+
+  return {
+    info: {
+      title: openapiSpec.info.title,
+      description: openapiSpec.info.description,
+      server: openapiSpec.servers[0].url
+    },
+    routes,
+    functions
+  }
 }

@@ -2,18 +2,9 @@
 
 "use client"
 
-import { default as Loading } from "@/app/[locale]/loading"
 import { ChatbotUIContext } from "@/context/context"
-import { getAssistantWorkspacesByWorkspaceId } from "@/db/assistants"
-import { getChatsByWorkspaceId } from "@/db/chats"
-import { getCollectionWorkspacesByWorkspaceId } from "@/db/collections"
-import { getFileWorkspacesByWorkspaceId } from "@/db/files"
-import { getFoldersByWorkspaceId } from "@/db/folders"
-import { getPresetWorkspacesByWorkspaceId } from "@/db/presets"
 import { getProfileByUserId } from "@/db/profile"
-import { getPromptWorkspacesByWorkspaceId } from "@/db/prompts"
-import { getAssistantImageFromStorage } from "@/db/storage/assistant-images"
-import { getToolWorkspacesByWorkspaceId } from "@/db/tools"
+import { getWorkspaceImageFromStorage } from "@/db/storage/workspace-images"
 import { getWorkspacesByUserId } from "@/db/workspaces"
 import { convertBlobToBase64 } from "@/lib/blob-to-b64"
 import {
@@ -28,11 +19,11 @@ import {
   ChatMessage,
   ChatSettings,
   LLM,
-  LLMID,
   MessageImage,
-  OpenRouterLLM
+  OpenRouterLLM,
+  WorkspaceImage
 } from "@/types"
-import { AssistantImage } from "@/types/assistant-image"
+import { AssistantImage } from "@/types/images/assistant-image"
 import { VALID_ENV_KEYS } from "@/types/valid-keys"
 import { useRouter } from "next/navigation"
 import { FC, useEffect, useState } from "react"
@@ -53,6 +44,7 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
   const [chats, setChats] = useState<Tables<"chats">[]>([])
   const [files, setFiles] = useState<Tables<"files">[]>([])
   const [folders, setFolders] = useState<Tables<"folders">[]>([])
+  const [models, setModels] = useState<Tables<"models">[]>([])
   const [presets, setPresets] = useState<Tables<"presets">[]>([])
   const [prompts, setPrompts] = useState<Tables<"prompts">[]>([])
   const [tools, setTools] = useState<Tables<"tools">[]>([])
@@ -69,6 +61,7 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
   // WORKSPACE STORE
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Tables<"workspaces"> | null>(null)
+  const [workspaceImages, setWorkspaceImages] = useState<WorkspaceImage[]>([])
 
   // PRESET STORE
   const [selectedPreset, setSelectedPreset] =
@@ -84,7 +77,7 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
   const [userInput, setUserInput] = useState<string>("")
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
   const [chatSettings, setChatSettings] = useState<ChatSettings>({
-    model: "gpt-4-1106-preview",
+    model: "gpt-4-turbo-preview",
     prompt: "You are a helpful AI assistant.",
     temperature: 0.5,
     contextLength: 4000,
@@ -104,13 +97,16 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
   // CHAT INPUT COMMAND STORE
   const [isPromptPickerOpen, setIsPromptPickerOpen] = useState(false)
   const [slashCommand, setSlashCommand] = useState("")
-  const [isAtPickerOpen, setIsAtPickerOpen] = useState(false)
-  const [atCommand, setAtCommand] = useState("")
+  const [isFilePickerOpen, setIsFilePickerOpen] = useState(false)
+  const [hashtagCommand, setHashtagCommand] = useState("")
   const [isToolPickerOpen, setIsToolPickerOpen] = useState(false)
   const [toolCommand, setToolCommand] = useState("")
   const [focusPrompt, setFocusPrompt] = useState(false)
   const [focusFile, setFocusFile] = useState(false)
   const [focusTool, setFocusTool] = useState(false)
+  const [focusAssistant, setFocusAssistant] = useState(false)
+  const [atCommand, setAtCommand] = useState("")
+  const [isAssistantPickerOpen, setIsAssistantPickerOpen] = useState(false)
 
   // ATTACHMENTS STORE
   const [chatFiles, setChatFiles] = useState<ChatFile[]>([])
@@ -127,22 +123,21 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
   const [selectedTools, setSelectedTools] = useState<Tables<"tools">[]>([])
   const [toolInUse, setToolInUse] = useState<string>("none")
 
-  // THIS COMPONENT
-  const [loading, setLoading] = useState<boolean>(true)
-
   useEffect(() => {
-    const fetchData = async () => {
+    ;(async () => {
       const profile = await fetchStartingData()
 
       if (profile) {
-        const data = await fetchHostedModels(profile)
+        const hostedModelRes = await fetchHostedModels(profile)
+        if (!hostedModelRes) return
 
-        if (!data) return
+        setEnvKeyMap(hostedModelRes.envKeyMap)
+        setAvailableHostedModels(hostedModelRes.hostedModels)
 
-        setEnvKeyMap(data.envKeyMap)
-        setAvailableHostedModels(data.hostedModels)
-
-        if (profile["openrouter_api_key"] || data.envKeyMap["openrouter"]) {
+        if (
+          profile["openrouter_api_key"] ||
+          hostedModelRes.envKeyMap["openrouter"]
+        ) {
           const openRouterModels = await fetchOpenRouterModels()
           if (!openRouterModels) return
           setAvailableOpenRouterModels(openRouterModels)
@@ -154,38 +149,8 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
         if (!localModels) return
         setAvailableLocalModels(localModels)
       }
-
-      // await fetchOpenaiAssistants()
-    }
-
-    fetchData()
+    })()
   }, [])
-
-  useEffect(() => {
-    const isInChat = window?.location?.pathname === "/chat"
-
-    if (!selectedWorkspace && !isInChat) {
-      setLoading(false)
-      return
-    }
-
-    setUserInput("")
-    setChatMessages([])
-    setSelectedChat(null)
-
-    setIsGenerating(false)
-    setFirstTokenReceived(false)
-
-    setChatFiles([])
-    setChatImages([])
-    setNewMessageFiles([])
-    setNewMessageImages([])
-    setShowFilesDisplay(false)
-
-    if (selectedWorkspace?.id) {
-      fetchWorkspaceData(selectedWorkspace.id)
-    }
-  }, [selectedWorkspace])
 
   const fetchStartingData = async () => {
     const session = (await supabase.auth.getSession()).data.session
@@ -197,121 +162,39 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
       setProfile(profile)
 
       if (!profile.has_onboarded) {
-        router.push("/setup")
-        return
+        return router.push("/setup")
       }
 
       const workspaces = await getWorkspacesByUserId(user.id)
       setWorkspaces(workspaces)
 
-      const homeWorkspace = workspaces.find(
-        workspace => workspace.is_home === true
-      )
+      for (const workspace of workspaces) {
+        let workspaceImageUrl = ""
 
-      // DB guarantees there will always be a home workspace
-      setSelectedWorkspace(homeWorkspace!)
+        if (workspace.image_path) {
+          workspaceImageUrl =
+            (await getWorkspaceImageFromStorage(workspace.image_path)) || ""
+        }
 
-      setChatSettings({
-        model: (homeWorkspace?.default_model || "gpt-4-1106-preview") as LLMID,
-        prompt:
-          homeWorkspace?.default_prompt ||
-          "You are a friendly, helpful AI assistant.",
-        temperature: homeWorkspace?.default_temperature || 0.5,
-        contextLength: homeWorkspace?.default_context_length || 4096,
-        includeProfileContext: homeWorkspace?.include_profile_context || true,
-        includeWorkspaceInstructions:
-          homeWorkspace?.include_workspace_instructions || true,
-        embeddingsProvider:
-          (homeWorkspace?.embeddings_provider as "openai" | "local") || "openai"
-      })
+        if (workspaceImageUrl) {
+          const response = await fetch(workspaceImageUrl)
+          const blob = await response.blob()
+          const base64 = await convertBlobToBase64(blob)
+
+          setWorkspaceImages(prev => [
+            ...prev,
+            {
+              workspaceId: workspace.id,
+              path: workspace.image_path,
+              base64: base64,
+              url: workspaceImageUrl
+            }
+          ])
+        }
+      }
 
       return profile
     }
-  }
-
-  const fetchWorkspaceData = async (workspaceId: string) => {
-    setLoading(true)
-
-    const assistantData = await getAssistantWorkspacesByWorkspaceId(workspaceId)
-    setAssistants(assistantData.assistants)
-
-    for (const assistant of assistantData.assistants) {
-      let url = ""
-
-      if (assistant.image_path) {
-        url = (await getAssistantImageFromStorage(assistant.image_path)) || ""
-      }
-
-      if (url) {
-        const response = await fetch(url)
-        const blob = await response.blob()
-        const base64 = await convertBlobToBase64(blob)
-
-        setAssistantImages(prev => [
-          ...prev,
-          {
-            assistantId: assistant.id,
-            path: assistant.image_path,
-            base64,
-            url
-          }
-        ])
-      } else {
-        setAssistantImages(prev => [
-          ...prev,
-          {
-            assistantId: assistant.id,
-            path: assistant.image_path,
-            base64: "",
-            url
-          }
-        ])
-      }
-    }
-
-    const chats = await getChatsByWorkspaceId(workspaceId)
-    setChats(chats)
-
-    const collectionData =
-      await getCollectionWorkspacesByWorkspaceId(workspaceId)
-    setCollections(collectionData.collections)
-
-    const folders = await getFoldersByWorkspaceId(workspaceId)
-    setFolders(folders)
-
-    const fileData = await getFileWorkspacesByWorkspaceId(workspaceId)
-    setFiles(fileData.files)
-
-    const presetData = await getPresetWorkspacesByWorkspaceId(workspaceId)
-    setPresets(presetData.presets)
-
-    const promptData = await getPromptWorkspacesByWorkspaceId(workspaceId)
-    setPrompts(promptData.prompts)
-
-    const toolData = await getToolWorkspacesByWorkspaceId(workspaceId)
-    setTools(toolData.tools)
-
-    setLoading(false)
-  }
-
-  const fetchOpenaiAssistants = async () => {
-    setLoading(true)
-
-    try {
-      const response = await fetch("/api/assistants/openai")
-
-      const data = await response.json()
-
-      setOpenaiAssistants(data.assistants)
-    } catch (error) {
-      console.warn("Error fetching OpenAI assistants: " + error)
-    }
-
-    setLoading(false)
-  }
-
-  if (loading) {
-    return <Loading />
   }
 
   return (
@@ -332,6 +215,8 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
         setFiles,
         folders,
         setFolders,
+        models,
+        setModels,
         presets,
         setPresets,
         prompts,
@@ -354,6 +239,8 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
         // WORKSPACE STORE
         selectedWorkspace,
         setSelectedWorkspace,
+        workspaceImages,
+        setWorkspaceImages,
 
         // PRESET STORE
         selectedPreset,
@@ -392,10 +279,10 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
         setIsPromptPickerOpen,
         slashCommand,
         setSlashCommand,
-        isAtPickerOpen,
-        setIsAtPickerOpen,
-        atCommand,
-        setAtCommand,
+        isFilePickerOpen,
+        setIsFilePickerOpen,
+        hashtagCommand,
+        setHashtagCommand,
         isToolPickerOpen,
         setIsToolPickerOpen,
         toolCommand,
@@ -406,6 +293,12 @@ export const GlobalState: FC<GlobalStateProps> = ({ children }) => {
         setFocusFile,
         focusTool,
         setFocusTool,
+        focusAssistant,
+        setFocusAssistant,
+        atCommand,
+        setAtCommand,
+        isAssistantPickerOpen,
+        setIsAssistantPickerOpen,
 
         // ATTACHMENT STORE
         chatFiles,
