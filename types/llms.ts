@@ -45,6 +45,10 @@ export type GroqLLMID =
   | "mixtral-8x7b-32768" // Mixtral-8x7b
   | "gemma-7b-it" // Gemma-7b IT
 
+export type GroqLLMID =
+  | "llama2-70b-4096" // LLaMA2-70b
+  | "mixtral-8x7b-32768" // Mixtral-8x7b
+
 // Perplexity Models (UPDATED 1/31/24)
 export type PerplexityLLMID =
   | "pplx-7b-online" // Perplexity Online 7B
