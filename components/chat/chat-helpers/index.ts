@@ -7,7 +7,7 @@ import { createMessages, updateMessage } from "@/db/messages"
 import { uploadMessageImage } from "@/db/storage/message-images"
 import {
   buildFinalMessages,
-  buildGoogleGeminiFinalMessages
+  adaptMessagesForGoogleGemini
 } from "@/lib/build-prompt"
 import { consumeReadableStream } from "@/lib/consume-stream"
 import { Tables, TablesInsert } from "@/supabase/types"
@@ -206,16 +206,13 @@ export const handleHostedChat = async (
       ? "azure"
       : modelData.provider
 
-  let formattedMessages = []
+  let draftMessages = await buildFinalMessages(payload, profile, chatImages)
 
+  let formattedMessages : any[] = []
   if (provider === "google") {
-    formattedMessages = await buildGoogleGeminiFinalMessages(
-      payload,
-      profile,
-      newMessageImages
-    )
+    formattedMessages = await adaptMessagesForGoogleGemini(payload, draftMessages)
   } else {
-    formattedMessages = await buildFinalMessages(payload, profile, chatImages)
+    formattedMessages = draftMessages
   }
 
   const apiEndpoint =
@@ -325,7 +322,7 @@ export const processResponse = async (
               const updatedChatMessage: ChatMessage = {
                 message: {
                   ...chatMessage.message,
-                  content: chatMessage.message.content + contentToAdd
+                  content: fullText
                 },
                 fileItems: chatMessage.fileItems
               }
