@@ -72,7 +72,7 @@
     "date-fns": "^2.30.0",
     "endent": "^2.1.0",
     "gpt-tokenizer": "^2.1.2",
-    "i18next": "^23.7.16",
+    "i18next": "^26.0.0",
     "i18next-resources-to-backend": "^1.2.0",
     "langchain": "^0.3.0",
     "lucide-react": "^0.577.0",
